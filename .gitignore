@@ -1,0 +1,15 @@
+build/
+.vs/
+out/
+*.obj
+*.pdb
+*.ilk
+*.tlog
+*.recipe
+*.iobj
+*.ipdb
+x64/
+bin/
+*.exp
+*.lib
+*.user

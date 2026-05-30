@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Release" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="sim-char-anim-custom-model.vcxproj" Id="7f8fa1c5-0512-43cb-b5c9-44b8a6f7445f" />
+</Solution>
