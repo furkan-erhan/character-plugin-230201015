@@ -8,6 +8,10 @@ Rather than relying on pre-baked keyframes or computationally expensive rigid-bo
 
 
 
+https://github.com/user-attachments/assets/6df4acee-039d-470b-8da4-dce4b21b422c
+
+
+
 > 🎬 **[Click here to watch the full Video Demonstration (All States)](/videos/All%20States.mp4)**
 
 ---
