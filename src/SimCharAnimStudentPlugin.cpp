@@ -1,11 +1,13 @@
-// FURKAN ERHAN 230201015
 // Güvenlik uyarılarını kapatır (C++'ın eski fonksiyonlar için verdiği uyarıları gizler)
 #define _CRT_SECURE_NO_WARNINGS
 // Windows API'sini daha hafif ve hızlı yüklemek için gereksiz kütüphaneleri dışarıda bırakır
 #define WIN32_LEAN_AND_MEAN
 // Klavye dinleme (GetAsyncKeyState) fonksiyonunu kullanabilmemiz için Windows kütüphanesi
-#include <windows.h>
 
+#define NOMINMAX
+
+#include <windows.h>
+#include <algorithm>
 // Eklentimizin kendi başlık dosyası
 #include "SimCharAnimStudentPlugin.h"
 
@@ -28,8 +30,8 @@
 
 namespace student::charanim {
 
-// Karakterin içinde bulunabileceği 4 farklı durum (State Machine mantığı)
-enum class MotionMode { Idle = 0, Walk = 1, Jump = 2, Run = 3 , Crawl = 4 };
+// Karakterin içinde bulunabileceği durumlar (İsimler yeni konsepte göre düzenlendi)
+enum class MotionMode { Idle = 0, Walk = 1, Run = 2, Jump = 3, Crawl = 4, Clap = 5, Wave = 6, SitCrossed = 7, Kick = 8, Kneel = 9, Swim = 10 };
 
 // Her bir eklemin X (Pitch), Y (Yaw), Z (Roll) eksenlerindeki açılarını tutan yapı
 struct SmoothedJoint {
@@ -62,11 +64,17 @@ static bool g_dumpedJoints = false; // Loglama yapılıp yapılmadığını kont
 
 // KLAVYE DİNLEME VE HIZ HESAPLAMA FONKSİYONU
 static void UpdateKeyboardState(EntityState& state) {
+    // Tuş atamaları 1'den 0'a kadar sıralı ve mantıklı hale getirildi
     bool k1 = (GetAsyncKeyState('1') & 0x8000) != 0; // Walk
-    bool k3 = (GetAsyncKeyState('2') & 0x8000) != 0; // Run
-    bool k2 = (GetAsyncKeyState('3') & 0x8000) != 0; // Jump
+    bool k2 = (GetAsyncKeyState('2') & 0x8000) != 0; // Run
+    bool k3 = (GetAsyncKeyState('3') & 0x8000) != 0; // Jump
     bool k4 = (GetAsyncKeyState('4') & 0x8000) != 0; // Crawl 
-    bool k5 = (GetAsyncKeyState('5') & 0x8000) != 0; // Idle 
+    bool k5 = (GetAsyncKeyState('5') & 0x8000) != 0; // Clap 
+    bool k6 = (GetAsyncKeyState('6') & 0x8000) != 0; // Wave
+    bool k7 = (GetAsyncKeyState('7') & 0x8000) != 0; // SitCrossed
+    bool k8 = (GetAsyncKeyState('8') & 0x8000) != 0; // Kick
+    bool k9 = (GetAsyncKeyState('9') & 0x8000) != 0; // Kneel
+    bool k0 = (GetAsyncKeyState('0') & 0x8000) != 0; // Swim
 
     double inputX = 0.0; // İleri/Geri
     double inputY = 0.0; // Sağ/Sol
@@ -76,16 +84,22 @@ static void UpdateKeyboardState(EntityState& state) {
     if ((GetAsyncKeyState('L') & 0x8000) != 0) inputY += 1.0;
     if ((GetAsyncKeyState('H') & 0x8000) != 0) inputY -= 1.0;
 
-    // 1-2-3 tuşlarına basılı tutulduğunda HJKL gibi otomatik ileri gitme etkisi
+    // 1-2-3-4 tuşlarına basılı tutulduğunda HJKL gibi otomatik ileri gitme etkisi
     if (k1 || k2 || k3 || k4) {
         inputX += 1.0;
     }
 
     // Basılı tutulan tuşa göre modu belirle
     if (k4) state.currentMode = MotionMode::Crawl;
-    else if (k3) state.currentMode = MotionMode::Run;
-    else if (k2) state.currentMode = MotionMode::Jump;
+    else if (k3) state.currentMode = MotionMode::Jump;
+    else if (k2) state.currentMode = MotionMode::Run;
     else if (k1) state.currentMode = MotionMode::Walk;
+    else if (k0) state.currentMode = MotionMode::Swim;
+    else if (k9) state.currentMode = MotionMode::Kneel;
+    else if (k8) state.currentMode = MotionMode::Kick;
+    else if (k7) state.currentMode = MotionMode::SitCrossed;
+    else if (k6) state.currentMode = MotionMode::Wave;        
+    else if (k5) state.currentMode = MotionMode::Clap;        
     else if (inputX != 0.0 || inputY != 0.0) {
         // HJKL ile hareket ediliyorsa ama 1-2-3'e basılmıyorsa varsayılan olarak Walk yap
         state.currentMode = MotionMode::Walk;
@@ -99,6 +113,12 @@ static void UpdateKeyboardState(EntityState& state) {
     else if (state.currentMode == MotionMode::Jump) speedLimit = 0.5;
     else if (state.currentMode == MotionMode::Run) speedLimit = 2.0;
     else if (state.currentMode == MotionMode::Crawl) speedLimit = 0.3;
+    else if (state.currentMode == MotionMode::Clap) speedLimit = 1.0;
+    else if (state.currentMode == MotionMode::Wave) speedLimit = 1.0;
+    else if (state.currentMode == MotionMode::SitCrossed) speedLimit = 1.0;
+    else if (state.currentMode == MotionMode::Kick) speedLimit = 1.0;
+    else if (state.currentMode == MotionMode::Kneel) speedLimit = 1.0;
+    else if (state.currentMode == MotionMode::Swim) speedLimit = 1.0;
 
     double length = std::sqrt(inputX * inputX + inputY * inputY);
     if (length > 0.0) {
@@ -237,17 +257,24 @@ namespace {
         // Işınlanmayı (Teleport) çözen asıl hamle: Zaman farkı (dt) ile Faz Birikimi
         if (state.lastTime > 0.0) {
             dt = t - state.lastTime;
-            if (dt > 1.0) dt = 0.02; // İlk açılışta devasa zıplamayı önler
+            dt = std::min(dt, 0.1); // İlk açılışta devasa zıplamayı önler
         }
         
         // Hangi moddaysak döngü frekansını (hızını) belirliyoruz
         double freq = 0.0;
         if (mode == MotionMode::Walk) freq = 4.0;
         else if (mode == MotionMode::Run) freq = 6.5;
+        else if (mode == MotionMode::Clap) freq = 6.0;      
+        else if (mode == MotionMode::Wave) freq = 2.0;      
+        else if (mode == MotionMode::SitCrossed) freq = 8.5; 
+        else if (mode == MotionMode::Kick) freq = 6.0;
+        else if (mode == MotionMode::Kneel) freq = 4.0;
+        else if (mode == MotionMode::Swim) freq = 10.0;
         
         // Fazı sürekli olarak üzerine ekleyerek biriktiriyoruz. 
-        // (Struct'ı bozmamak için "phase_acc" adında sahte bir eklemde bu veriyi saklıyoruz)
-        state.joints["phase_acc"].x += dt * freq * speedScale;
+        double effectiveScale = (speedScale > 0.0) ? speedScale : 1.0;
+        state.joints["phase_acc"].x += dt * freq * effectiveScale;
+
         currentPhase = state.joints["phase_acc"].x;
     }
 
@@ -279,7 +306,7 @@ namespace {
     targets["leftAnkle"] = {0.0, 0.0, 0.0};
     targets["rightAnkle"] = {0.0, 0.0, 0.0};
 
-// --- YÜRÜME (WALK) DURUMU ---
+    // --- YÜRÜME (WALK) DURUMU ---
     if (mode == MotionMode::Walk && speedScale > 0.0) {
         // Zaman ve hıza bağlı bir döngü oluşturur (Faz)
         double cycle = currentPhase;
@@ -293,17 +320,17 @@ namespace {
 
         targets["rightShoulder"].z = rSwing;
         targets["rightShoulder"].x = rSwing * 0.5;
-        targets["rightElbow"].z = rSwing * 0.35;
+        targets["rightElbow"].z = rSwing * 0.2;
         targets["rightElbow"].y = rSwing * 0.02;
 
         targets["leftShoulder"].z = lSwing;
         targets["leftShoulder"].x = lSwing * 0.5;
-        targets["leftElbow"].z = lSwing * 0.35;
+        targets["leftElbow"].z = lSwing * 0.2;
         targets["leftElbow"].y = lSwing * 0.02;
 
         // Sadece bacak ileri atılırken (lSwing > 0) dizin bükülmesini sağlar, yere basarken düz tutar
-        double lKnee = (lSwing > 0.0) ? lSwing * -0.25 : 0.0;
-        double rKnee = (rSwing > 0.0) ? rSwing * -0.25 : 0.0;
+        double lKnee = (lSwing > 0.0) ? lSwing * -0.25 : -0.45;
+        double rKnee = (rSwing > 0.0) ? rSwing * -0.25 : -0.45;
 
         targets["leftKnee"].z = lKnee;
         targets["rightKnee"].z = rKnee;
@@ -321,39 +348,31 @@ namespace {
         double lSwing = std::sin(cycle);
         double rSwing = std::sin(cycle + 3.14159);
 
-        // Koşarken adımlar daha büyük açılır (0.6 yerine 0.95)
-        targets["leftHip"].z = lSwing * 1.15;
-        targets["rightHip"].z = rSwing * 1.15;
+        targets["leftHip"].z = lSwing * 0.7;
+        targets["rightHip"].z = rSwing * 1;
 
-        // Omuzlar koşarken daha hızlı ve geniş savrulur
-        targets["rightShoulder"].z = rSwing * 1;
-        targets["rightShoulder"].x = rSwing * 0.5;
-        // Dirsekleri koşarken daha çok bük ki kollar savrulsun
-        targets["rightElbow"].z = -1.25 + (rSwing);
-        targets["rightElbow"].y = rSwing * 0.05;
+        double armX = 0.25; 
+        
+        targets["leftShoulder"] = {0.1 * lSwing , 1.0,1.5 * lSwing}; 
+        targets["leftElbow"] = {0.0, 0.0, -1.4 + (lSwing * 0.8)};
 
-        targets["leftShoulder"].z = lSwing * 1;
-        targets["leftShoulder"].x = lSwing * 0.5;
-        targets["leftElbow"].z = -1.25 + (lSwing);
-        targets["leftElbow"].y = lSwing * 0.05;
+        targets["rightShoulder"] = {0.1 * rSwing , 1.0,1.5 * rSwing};
+        targets["rightElbow"] = {0.0, 0.0, -1.4 + (rSwing * 0.4)};
 
-        // Koşarken dizler daha çok karına çekilir (-0.25 yerine -0.7)
-        double lKnee = (lSwing > 0.0) ? lSwing * -0.35 : 0.0;
-        double rKnee = (rSwing > 0.0) ? rSwing * -0.35 : 0.0;
+        double lKnee = (lSwing > 0.0) ? lSwing * -0.25 : -1.5;
+        double rKnee = (rSwing > 0.0) ? rSwing * -0.25 : -1.5;
 
         targets["leftKnee"].z = lKnee;
         targets["rightKnee"].z = rKnee;
 
-        // Ayak bileği esnemesi
-        targets["leftAnkle"].z = -lKnee * 0.3;
-        targets["rightAnkle"].z = -rKnee * 0.3;
+        targets["leftAnkle"].z = lKnee * 0.3;
+        targets["rightAnkle"].z = rKnee * 0.3;
     }
 
     // --- JUMP (ZIPLAMA) DURUMU ---
     if (mode == MotionMode::Jump && speedScale > 0.0) {
-        // Anatomik olarak çökme pozisyonu için kalçayı ileri, dizi geriye kırar
-        targets["leftShoulder"] = {-0.2, 1, 0.2};
-        targets["rightShoulder"] = {-0.2, 1, 0.2};
+        targets["leftShoulder"] = {-0.2, 0.5, 0.2};
+        targets["rightShoulder"] = {-0.2, 0.5, 0.2};
         targets["leftElbow"] = {0.6, 0.2, -0.6};
         targets["rightElbow"] = {0.6, 0.2, -0.6};
 
@@ -372,36 +391,158 @@ namespace {
         double lSwing = std::sin(cycle);
         double rSwing = std::sin(cycle + 3.14159);
 
-        // Bacakları geriye doğru kır ve sürünme hareketi ver
         targets["leftHip"].z = -0.15 + (lSwing * 0.34); 
         targets["rightHip"].z = -0.1 + (rSwing * 0.34);
         
-        targets["leftKnee"].z = -2.4 + (lSwing > 0.0 ? lSwing * 0.1 : 0.0);
-        targets["rightKnee"].z = -2.1 + (rSwing > 0.0 ? rSwing * 0.1 : 0.0);
+        targets["leftKnee"].z = -1.4 + (lSwing > 0.0 ? lSwing * -0.5 : 0.0);
+        targets["rightKnee"].z = -1.4 + (rSwing > 0.0 ? rSwing * -0.5 : 0.0);
 
-        targets["leftAnkle"].z = 0.4;
-        targets["rightAnkle"].z = 0.4;
+        targets["leftAnkle"].z = -1;
+        targets["rightAnkle"].z = -1;
 
-        // Kolları omuzlardan dışarı al, dirsekleri komando gibi kır
         targets["leftShoulder"].z = lSwing * 0.25;
-        targets["leftShoulder"].y = 1 + lSwing * 0.05;
+        targets["leftShoulder"].y = 1.2 + lSwing * 0.05;
         targets["leftShoulder"].x = lSwing * 0.25;
 
         targets["rightShoulder"].z = rSwing * 0.35;
-        targets["rightShoulder"].y = 1 + rSwing * 0.05;
+        targets["rightShoulder"].y = 1.2 + rSwing * 0.05;
         targets["rightShoulder"].x = rSwing * 0.35;
-
-
 
         targets["rightElbow"].y = -0.3;
         targets["rightElbow"].z = -1.25 + rSwing * 0.2 ;
 
         targets["leftElbow"].y = -0.3;
         targets["leftElbow"].z = -1.25 + lSwing * 0.2 ;
-
-
     }
 
+    // YENİ ANİMASYONLAR BAŞLANGIÇ --------------------------------------------------------------------------------------------------------
+
+    // --- 5: CLAP (ALKIŞLAMA) DURUMU ---
+    if (mode == MotionMode::Clap) {
+        double clapPhase = currentPhase * 5.0; 
+        double clapMotion = std::sin(clapPhase) * 0.50; 
+        double bounce = std::sin(clapPhase * 0.5) * 0.03; // Ritmik diz yaylanması
+
+        targets["leftHip"] = {0.0, 0.0, 0.1};
+        targets["rightHip"] = {0.0, 0.0, 0.1};
+        targets["leftKnee"] = {0.0, 0.0, -0.1 + bounce * 0.1};
+        targets["rightKnee"] = {0.0, 0.0, -0.1 - bounce * 0.1};
+        targets["leftAnkle"] = {0.0, 0.0, 0.0};
+        targets["rightAnkle"] = {0.0, 0.0, 0.0};
+
+        targets["leftShoulder"] = {1.25 + clapMotion, 1.47, 0.8}; 
+        targets["leftElbow"] = {0.0, 0.0, -2.1}; 
+
+        targets["rightShoulder"] = {1.25 + clapMotion, 1.47, 0.8}; 
+        targets["rightElbow"] = {0.0, 0.0, -2.1}; 
+    }
+
+    // --- 6: WAVE (EL SALLAMA) DURUMU ---
+    if (mode == MotionMode::Wave) {
+        double wavePhase = currentPhase * 2.0; 
+        double waveSwing = std::sin(wavePhase) * 0.4; 
+        
+        double bodySway = std::sin(currentPhase * 1.0) * 0.05;
+
+        targets["leftHip"] = {0.0, 0.0, 0.0 + bodySway * 0.3};
+        targets["rightHip"] = {0.0, 0.0, 0.0 - bodySway * 0.3};
+        targets["leftKnee"] = {0.0, 0.0, 0.0};
+        targets["rightKnee"] = {0.0, 0.0, 0.0};
+        targets["leftAnkle"] = {0.0, 0.0, 0.0};
+        targets["rightAnkle"] = {0.0, 0.0, 0.0};
+
+        targets["leftShoulder"] = {0.2, 1.47 + bodySway, 0.0 + bodySway * 1.2}; 
+        targets["leftElbow"] = {0.0, 0.0, -0.1}; 
+
+        targets["rightShoulder"] = {-1.0, 0.47 + bodySway * 1.5, 0.0 + bodySway}; 
+        targets["rightElbow"] = {0.0, 0.0 , -2.0 + waveSwing}; 
+    }
+
+    // --- 7: SIT CROSSED (GÖRÜNMEZ SANDALYEDE BACAK BACAK ÜSTÜNE ATMA) ---
+    if (mode == MotionMode::SitCrossed) { 
+        // Enhance: Doğal sallanma ve nefes efekti eklendi
+        double sway = std::sin(currentPhase * 0.5) * 0.04;
+        double breath = std::sin(currentPhase * 0.5) * 0.02;
+
+        targets["leftHip"] = {0.0, 0.0, 1.5};       
+        targets["leftKnee"] = {0.0, 0.0, -1.5};     
+        targets["leftAnkle"] = {0.0, 0.0, 0.0};     
+
+        targets["rightHip"] = {1.45, 0.0, 1.8};     
+        targets["rightKnee"] = {0.0, 0.0, -1.5};    
+        targets["rightAnkle"] = {breath * 3.4 , 0.0, -0.2 - breath * 3.4 };   
+
+        targets["leftShoulder"] = {-0.4, 1.5, 0.3};
+        targets["rightShoulder"] = {-0.4, 1.5, 0.3}; 
+
+        targets["leftElbow"] = {1.85, 1.0, -0.8};
+        targets["rightElbow"] = {2.7, 1.0 , -1.0}; 
+    }
+
+        // --- 8:  KICK (TEKME) DURUMU ---
+    if (mode == MotionMode::Kick) {
+        double kick = std::sin(currentPhase); 
+
+        targets["leftHip"] = {0.0, 0.0, 0.1 + kick * 0.01};
+        targets["leftKnee"] = {0.0, 0.0, -0.2}; 
+        targets["leftAnkle"] = {0.0, 0.0, 0.0};
+      
+        targets["rightHip"] = {0.0, 0.0, (kick > 0.5) ? 2.0 : 0.5}; 
+        targets["rightKnee"] = {0.0, 0.0, (kick > 0.5) ? 0.0 : -2.2}; 
+        targets["rightAnkle"] = {0.0, 0.0, -0.6}; 
+
+        targets["leftShoulder"] = {kick * 0.1, 1.0, 0.8 + kick * 0.5}; 
+        targets["rightShoulder"] = {kick * 0.1, 1.0, 0.8 + kick * 0.5};
+        targets["leftElbow"] = {0.0, kick * 0.1, -0.65 + kick * 0.2};
+        targets["rightElbow"] = {0.0, kick * 0.1, -0.65 + kick * 0.2};
+    }
+
+    // --- 9: KNEEL (DİZ ÜSTÜNDE OTURMA) DURUMU  ---
+    if (mode == MotionMode::Kneel) {
+        
+        targets["leftHip"] = {0.2, 0.0, 1.65};
+        targets["leftKnee"] = {0.0, 0.0, -2.72};
+        targets["leftAnkle"] = {0.0, 0.0, -1.5};
+
+        targets["rightHip"] = {0.2, 0.0, 1.65};
+        targets["rightKnee"] = {0.0, 0.0, -2.72}; // Diz dümdüz
+        targets["rightAnkle"] = {0.0, 0.0, -1.5};
+
+        targets["leftShoulder"] = {-0.4, 1.5, 0.3};
+        targets["rightShoulder"] = {-0.4, 1.5, 0.3}; 
+
+        targets["leftElbow"] = {1.85, 1.0, -0.8};
+        targets["rightElbow"] = {1.85, 1.0 , -0.8}; 
+    }
+
+    // --- 0: SWIM (YÜZME) DURUMU ---
+    if (mode == MotionMode::Swim) {
+        double punchPhase = std::sin(currentPhase);
+        double dip = (punchPhase < 0.0) ? -punchPhase * 0.4 : 0.0; 
+        double explode = (punchPhase > 0.0) ? punchPhase : 0.0;    
+
+        targets["leftHip"] = {0.0, 0.0, -0.9 + (punchPhase * 0.5)};
+        targets["rightHip"] = {0.0, 0.0, -0.9 - (punchPhase * 0.5)};
+        targets["leftKnee"] = {0.0, 0.0, -0.2 + (punchPhase * 0.4)};
+        targets["rightKnee"] = {0.0, 0.0, -0.1 - (punchPhase * 0.4)};
+
+        
+        targets["leftShoulder"] = {1.8, 0.3, -1 + (explode * 2.0)};
+        targets["rightShoulder"] = {1.8, 0.3, -1 + (explode * 1.8)};
+     
+
+        targets["rightElbow"].z = punchPhase * 0.1;
+        targets["rightElbow"].y = -1.25 + (punchPhase * 0.7);
+
+        targets["leftElbow"].z = punchPhase * 0.1;
+        targets["leftElbow"].y = -1.25 + (punchPhase * 0.5);
+
+        targets["leftAnkle"].z = punchPhase * -0.3;
+        targets["rightAnkle"].z = punchPhase * 0.3;
+    }   
+    
+    // YENİ ANİMASYONLAR BİTİŞ --------------------------------------------------------------------------------------------------------
+    
     // --- EXPONENTIAL DECAY (PÜRÜZSÜZLEŞTİRME) DÖNGÜSÜ ---
     // Animasyonlar (örn: Koşarken aniden durma) arası sert atlamaları engeller.
     {
@@ -409,7 +550,7 @@ namespace {
         auto& state = g_entityStates[input.entity.entityId];
         
         // İlk frame ise (animasyon yeni başlıyorsa) değerleri direkt atar
-        if (state.lastTime < 0.0 || t < state.lastTime || (t - state.lastTime) > 1.0) {
+        if (state.lastTime < 0.0 || t < state.lastTime) {
             for (const auto& kv : targets) {
                 state.joints[kv.first] = kv.second;
             }
@@ -424,12 +565,22 @@ namespace {
                 smoothFactor = 4.0;  // Çooook smooth (Sinematik yavaş çöküş ve kalkış)
             } 
             else if (mode == MotionMode::Run) {
-                smoothFactor = 25.0; // Az smoothing (Koşuya geçerken atik ve keskin bir tepki)
+                smoothFactor = 20.0; // Az smoothing (Koşuya geçerken atik ve keskin bir tepki)
             }
             else if (mode == MotionMode::Crawl) {
                 smoothFactor = 6.0; // Sürünme pozisyonuna pürüzsüz ama kararlı geçiş
             }
+            else if (mode == MotionMode::Kick || mode == MotionMode::Kneel || mode == MotionMode::Swim) {
+                smoothFactor = 25.0; // Vuruşlar keskin ve atik olmalı
+            }
+            else if (mode == MotionMode::Wave || mode == MotionMode::Clap) {
+                smoothFactor = 10.0; // Animasyonlara dönüş doğal olmalı
+            }
+            else if (mode == MotionMode::SitCrossed) {
+                smoothFactor = 25.0; // Sandalyeye oturur gibi daha ağır geçiş
+            }
             
+            dt = std::clamp(dt, 0.001, 0.1);
             double alpha = 1.0 - std::exp(-smoothFactor * dt);
 
             for (const auto& kv : targets) {
