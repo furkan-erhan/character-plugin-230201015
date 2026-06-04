@@ -13,3 +13,4 @@ bin/
 *.exp
 *.lib
 *.user
+.obsidian
